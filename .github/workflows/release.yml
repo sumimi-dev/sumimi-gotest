@@ -39,12 +39,16 @@ jobs:
 
       # The six targets. `CGO_ENABLED=0` is what makes them static: the file
       # has to run on a machine with nothing on it.
+      #
+      # The binaries go into `bin/` and the archives into `dist/`: the upload
+      # takes the whole of `dist/`, and a stray directory there would be
+      # uploaded as an asset.
       - name: The build
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
-          mkdir -p dist
+          mkdir -p bin dist
           for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             GOOS="${target%/*}"
             GOARCH="${target#*/}"
@@ -52,24 +56,22 @@ jobs:
             if [ "$GOOS" = "windows" ]; then extension=".exe"; fi
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
               go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-              -o "dist/sumimi-gotest-${GOOS}-${GOARCH}${extension}" ./cmd/sumimi-gotest
+              -o "bin/sumimi-gotest-${GOOS}-${GOARCH}${extension}" ./cmd/sumimi-gotest
           done
-          ls -la dist/
+          ls -la bin/
 
       - name: The archives
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${TAG#v}"
-          for file in dist/sumimi-gotest-*; do
+          for file in bin/sumimi-gotest-*; do
             name="$(basename "$file")"
             if [ "${name##*.}" = "exe" ]; then
-              (cd dist && zip -qr "../${name}.zip" "$name")
+              (cd bin && zip -qr "../dist/${name}.zip" "$name")
             else
-              tar czf "dist/${name}.tar.gz" -C dist "$name"
+              tar czf "dist/${name}.tar.gz" -C bin "$name"
             fi
           done
-          rm -f dist/sumimi-gotest-* 2>/dev/null || true
           ls -la dist/
 
       - uses: actions/upload-artifact@v4
@@ -109,11 +111,12 @@ jobs:
             echo "| Windows (x86-64) | \`sumimi-gotest-windows-amd64.exe.zip\` |"
             echo "| Windows (ARM64) | \`sumimi-gotest-windows-arm64.exe.zip\` |"
           } > notes.md
+          mapfile -t assets < <(find artifacts -type f | sort)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" artifacts/sumimi-gotest/* --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --title "Sumimi GoTest v${VERSION}" --notes-file notes.md
           else
-            gh release create "$TAG" artifacts/sumimi-gotest/* \
+            gh release create "$TAG" "${assets[@]}" \
               --title "Sumimi GoTest v${VERSION}" --notes-file notes.md
           fi
           echo "published $TAG"
