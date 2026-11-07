@@ -39,6 +39,17 @@ type Point struct {
 	AdmitRPS uint64 `json:"admitRps,omitempty"`
 	// How many requests the server says it refused.
 	RefusedByTheServer uint64 `json:"refusedByTheServer,omitempty"`
+	// How many events were waiting to be written when the run ended — the
+	// backlog is where the memory goes when the writer cannot keep up.
+	Queued uint64 `json:"queued,omitempty"`
+	// How many events the server had to drop.
+	Dropped uint64 `json:"dropped,omitempty"`
+	// What the engine was holding, in bytes.
+	EngineBytes int64 `json:"engineBytes,omitempty"`
+	// The 99th percentile of the write durations, in milliseconds.
+	FlushP99MS uint64 `json:"flushP99Ms,omitempty"`
+	// The slowest write, in milliseconds.
+	FlushMaxMS uint64 `json:"flushMaxMs,omitempty"`
 	// The size of every payload.
 	PayloadBytes int `json:"payloadBytes,omitempty"`
 }
@@ -97,6 +108,21 @@ func (r Report) Markdown() string {
 			group(point.Refused),
 			fmt.Sprintf("%s/s", group(int64(point.Achieved+0.5))),
 			peak(point.PeakRSSBytes),
+		)
+	}
+
+	// The write path's own account: where the memory goes when the machine
+	// cannot keep up.
+	out.WriteString("\n| the rate offered | the queue at the end | the engine held | the slowest write |\n")
+	out.WriteString("| ---: | ---: | ---: | ---: |\n")
+	for _, point := range r.Points {
+		fmt.Fprintf(
+			&out,
+			"| %s | %s | %s | %s |\n",
+			group(point.Rate),
+			group(int64(point.Queued)),
+			size(uint64(point.EngineBytes)),
+			fmt.Sprintf("%d ms", point.FlushMaxMS),
 		)
 	}
 

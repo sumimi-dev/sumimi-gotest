@@ -138,18 +138,38 @@ func measure(ctx context.Context, options Options, rate int) (report.Point, erro
 		Achieved:     result.Achieved,
 		PayloadBytes: len(body),
 	}
+	// The peak: **the server's own account** first.
+	//
+	// On Linux the server reads `/proc/self/status` (`VmHWM`) — the exact
+	// high-water mark. The kernel's `ru_maxrss` is **not** the same thing
+	// there: Linux does not reset it on `exec`, so a child's `ru_maxrss`
+	// still carries the parent's resident set from the moment of the fork.
+	// The load generator is a big process by then, and its memory would be
+	// reported as the server's peak — the second point of a sweep would
+	// report more than the third, for the same rate.
+	//
+	// So: the server's own number wins, and the kernel's is only a fallback
+	// for the platforms that have no `/proc` (macOS resets `ru_maxrss` on
+	// `exec`, so there it is the server's own).
 	point.PeakRSSBytes = after.PeakRSSBytes
 	point.RSSBytes = after.RSSBytes
 	point.AdmitRPS = after.AdmitRPS
 	point.RefusedByTheServer = after.RefusedRate + after.RefusedInflight + after.RefusedBody
+	// The server's own account of the write path: where the memory went.
+	point.Queued = after.Queued
+	point.Dropped = after.Dropped
+	point.EngineBytes = after.Memory
+	point.FlushP99MS = after.FlushP99
+	point.FlushMaxMS = after.FlushMax
 
-	// The kernel's own account of the peak, when this sweep started the
-	// server: `ru_maxrss` is exact on every platform, and the parent is the
-	// one that gets it.
 	if started != nil {
 		started.Stop()
-		if peak := started.PeakBytes(); peak > 0 {
-			point.PeakRSSBytes = peak
+		if point.PeakRSSBytes == 0 {
+			if peak := started.PeakBytes(); peak > 0 {
+				point.PeakRSSBytes = peak
+				options.Report.Notes = "The peak is the kernel's `ru_maxrss` — the server cannot " +
+					"report its own high-water mark on this platform."
+			}
 		}
 	}
 
