@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -157,11 +156,7 @@ func (s *Server) Stop() {
 		// process state, and that is where the kernel's account of the peak
 		// is.
 		_ = s.command.Wait()
-		if state := s.command.ProcessState; state != nil {
-			if usage, ok := state.SysUsage().(*syscall.Rusage); ok && usage != nil {
-				s.peak = maxrssToBytes(usage.Maxrss)
-			}
-		}
+		s.peak = peakRusage(s.command.ProcessState)
 	}
 	if s.log != nil {
 		s.log.Close()
