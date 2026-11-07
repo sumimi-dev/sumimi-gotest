@@ -22,6 +22,9 @@ import (
 	"time"
 )
 
+// The heap the tool is allowed before the collector steps in.
+const memoryLimit = 64 << 20
+
 // What to do.
 type Options struct {
 	// The URL every request goes to.
@@ -56,9 +59,19 @@ type Result struct {
 
 // Run the load.
 func Run(ctx context.Context, httpClient *http.Client, options Options) Result {
-	// The collector stays out of the way of the schedule.
-	previous := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(previous)
+	// The collector stays out of the way of the schedule — **but not
+	// entirely**. Turning it off altogether lets the garbage pile up: a
+	// hundred thousand requests make hundreds of megabytes of it, and the
+	// tool then steals the memory and the CPU from the very server it is
+	// measuring. On a 512 MB box it was killed by the OOM reaper (and the
+	// numbers it produced belonged to a machine that was half busy).
+	//
+	// So: a soft memory limit instead of a stopped collector. The heap
+	// stays bounded, the pauses stay rare, and the schedule stays honest.
+	previousLimit := debug.SetMemoryLimit(memoryLimit)
+	defer debug.SetMemoryLimit(previousLimit)
+	previousPercent := debug.SetGCPercent(400)
+	defer debug.SetGCPercent(previousPercent)
 
 	if options.Connections < 1 {
 		options.Connections = 1
