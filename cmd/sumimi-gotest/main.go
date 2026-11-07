@@ -206,6 +206,7 @@ func sweepCommand(arguments []string) {
 	payloadBytes := flags.Int("payload-bytes", 0, "the size of every payload, in bytes")
 	memoryLimit := flags.String("memory-limit", "", "the engine's memory limit for the servers this starts")
 	admitRPS := flags.Int("admit-rps", 0, "the rate the gate admits for the servers this starts")
+	settle := flags.Int("settle", 5, "how long to let the machine settle between two points (seconds)")
 	out := flags.String("out", "", "write the Markdown report to this file")
 	jsonOut := flags.String("json", "", "write the JSON report to this file")
 	_ = flags.Parse(arguments)
@@ -227,6 +228,7 @@ func sweepCommand(arguments []string) {
 		Seconds:      *seconds,
 		Connections:  *connections,
 		PayloadBytes: *payloadBytes,
+		Settle:       time.Duration(*settle) * time.Second,
 		Report:       &document,
 	})
 	if err != nil {

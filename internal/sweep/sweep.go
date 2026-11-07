@@ -46,6 +46,15 @@ type Options struct {
 	Connections int
 	// The size of every payload, in bytes.
 	PayloadBytes int
+	// How long to let the machine settle between two points.
+	//
+	// **This matters.** The server before this one has just written tens of
+	// thousands of events to the disk, and the kernel is still writing them
+	// back. The next server then competes with that writeback, its writer
+	// falls behind, its queue grows — and the peak it reports is the
+	// measurement of the *previous* point, not of this one. On a small box
+	// with a slow disk it is the difference between 139 MB and 419 MB.
+	Settle time.Duration
 	// The report to fill in.
 	Report *report.Report
 }
@@ -62,6 +71,16 @@ func Run(ctx context.Context, options Options) error {
 			return err
 		}
 		options.Report.Points = append(options.Report.Points, point)
+		// Let the machine settle before the next point: the last server has
+		// just written tens of thousands of events, and the kernel is still
+		// writing them back.
+		if options.Settle > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(options.Settle):
+			}
+		}
 	}
 	return nil
 }
