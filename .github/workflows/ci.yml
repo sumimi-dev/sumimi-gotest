@@ -1,0 +1,43 @@
+# The tests.
+#
+# The tool has to be **right about the rate**: the offered rate is the thing
+# being measured, and a tool that cannot offer the rate it says it offers
+# produces numbers that are a lie. So the tests check the rate, not just the
+# code paths.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: The tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: The tests
+        run: go test ./...
+
+      # The race detector: the load generator is a pile of goroutines, and a
+      # data race in it would make the numbers wrong in a way nobody would
+      # notice.
+      - name: The tests, with the race detector
+        run: go test -race ./...
+
+      - name: The build
+        run: go build ./cmd/sumimi-gotest

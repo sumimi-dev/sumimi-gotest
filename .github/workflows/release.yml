@@ -1,0 +1,119 @@
+# The release.
+#
+# **Six artefacts** — macOS, Linux and Windows, each in arm64 and x64 — and
+# they are one file each: the tool uses the standard library only, so
+# `go build` produces a static binary for every target in seconds, with no
+# cross-compiler and no Docker.
+#
+# The tag is the version: push `v0.1.0` and the release appears.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag to publish (v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: The binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      # The six targets. `CGO_ENABLED=0` is what makes them static: the file
+      # has to run on a machine with nothing on it.
+      - name: The build
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            extension=""
+            if [ "$GOOS" = "windows" ]; then extension=".exe"; fi
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/sumimi-gotest-${GOOS}-${GOARCH}${extension}" ./cmd/sumimi-gotest
+          done
+          ls -la dist/
+
+      - name: The archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          for file in dist/sumimi-gotest-*; do
+            name="$(basename "$file")"
+            if [ "${name##*.}" = "exe" ]; then
+              (cd dist && zip -qr "../${name}.zip" "$name")
+            else
+              tar czf "dist/${name}.tar.gz" -C dist "$name"
+            fi
+          done
+          rm -f dist/sumimi-gotest-* 2>/dev/null || true
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sumimi-gotest
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: The release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: The release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          {
+            echo "Sumimi GoTest v${VERSION} — the measuring instrument, in Go."
+            echo
+            echo "One static file per platform: the standard library only, no runtime to install."
+            echo
+            echo "| platform | file |"
+            echo "| --- | --- |"
+            echo "| macOS (Apple Silicon) | \`sumimi-gotest-darwin-arm64.tar.gz\` |"
+            echo "| macOS (Intel) | \`sumimi-gotest-darwin-amd64.tar.gz\` |"
+            echo "| Linux (x86-64) | \`sumimi-gotest-linux-amd64.tar.gz\` |"
+            echo "| Linux (ARM64) | \`sumimi-gotest-linux-arm64.tar.gz\` |"
+            echo "| Windows (x86-64) | \`sumimi-gotest-windows-amd64.exe.zip\` |"
+            echo "| Windows (ARM64) | \`sumimi-gotest-windows-arm64.exe.zip\` |"
+          } > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/sumimi-gotest/* --clobber
+            gh release edit "$TAG" --title "Sumimi GoTest v${VERSION}" --notes-file notes.md
+          else
+            gh release create "$TAG" artifacts/sumimi-gotest/* \
+              --title "Sumimi GoTest v${VERSION}" --notes-file notes.md
+          fi
+          echo "published $TAG"
