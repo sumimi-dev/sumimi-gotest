@@ -33,6 +33,8 @@ type Options struct {
 	AdmitRPS int
 	// Extra arguments for the server.
 	Extra []string
+	// Extra environment variables for the server.
+	Environment [][2]string
 }
 
 // A running server.
@@ -81,6 +83,9 @@ func Start(ctx context.Context, options Options) (*Server, error) {
 	}
 	if options.AdmitRPS > 0 {
 		command.Env = append(command.Env, "SUMIMI_MAX_ADMIT_RPS="+strconv.Itoa(options.AdmitRPS))
+	}
+	for _, pair := range options.Environment {
+		command.Env = append(command.Env, pair[0]+"="+pair[1])
 	}
 
 	// The server's own log: it is what a failed start has to be read from.

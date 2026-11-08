@@ -207,6 +207,7 @@ func sweepCommand(arguments []string) {
 	memoryLimit := flags.String("memory-limit", "", "the engine's memory limit for the servers this starts")
 	admitRPS := flags.Int("admit-rps", 0, "the rate the gate admits for the servers this starts")
 	settle := flags.Int("settle", 5, "how long to let the machine settle between two points (seconds)")
+	environments := flags.String("env", "", "an environment variable for the server, KEY=VALUE (repeatable, comma separated)")
 	out := flags.String("out", "", "write the Markdown report to this file")
 	jsonOut := flags.String("json", "", "write the JSON report to this file")
 	_ = flags.Parse(arguments)
@@ -218,6 +219,7 @@ func sweepCommand(arguments []string) {
 
 	document := report.New("sumimi-gotest", version)
 	err = sweep.Run(context.Background(), sweep.Options{
+		Environment:  splitEnvironment(*environments),
 		Binary:       *binary,
 		BaseURL:      server.baseURL(),
 		User:         *server.user,
@@ -307,4 +309,21 @@ func size(bytes uint64) string {
 		return fmt.Sprintf("%d MB", megabytes)
 	}
 	return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
+}
+
+// splitEnvironment: the `--env` flag's pairs.
+func splitEnvironment(text string) [][2]string {
+	var pairs [][2]string
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, value, found := strings.Cut(part, "=")
+		if !found {
+			continue
+		}
+		pairs = append(pairs, [2]string{key, value})
+	}
+	return pairs
 }

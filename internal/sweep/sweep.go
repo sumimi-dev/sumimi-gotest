@@ -55,6 +55,8 @@ type Options struct {
 	// measurement of the *previous* point, not of this one. On a small box
 	// with a slow disk it is the difference between 139 MB and 419 MB.
 	Settle time.Duration
+	// The environment for the servers this starts.
+	Environment [][2]string
 	// The report to fill in.
 	Report *report.Report
 }
@@ -97,6 +99,7 @@ func measure(ctx context.Context, options Options, rate int) (report.Point, erro
 			Password:    options.Password,
 			MemoryLimit: options.MemoryLimit,
 			AdmitRPS:    options.AdmitRPS,
+			Environment: options.Environment,
 		})
 		if err != nil {
 			return report.Point{}, err
