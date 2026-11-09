@@ -34,6 +34,15 @@ import (
 	"github.com/sumimi-dev/sumimi-gotest/internal/server"
 )
 
+// measurementTimeout: how long a report may take.
+//
+// **A report over three years on a small box takes minutes.** The SQLite
+// backend answers a three-year summary in 24 seconds on a fast machine — and
+// in over two minutes on a CI runner. A timeout that cuts it off turns a slow
+// answer into **no answer**, and the measurement would record a failure
+// instead of a number.
+const measurementTimeout = 15 * time.Minute
+
 // Options for the measurement.
 type Options struct {
 	// The binary of the server to measure. Empty means "an already-running
@@ -259,7 +268,7 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 		return measured, "", fmt.Errorf("an already-running server can only be one backend")
 	}
 
-	api := client.New(baseURL)
+	api := client.NewWithTimeout(baseURL, measurementTimeout)
 	if err := api.Login(ctx, options.User, options.Password); err != nil {
 		return measured, directory, err
 	}

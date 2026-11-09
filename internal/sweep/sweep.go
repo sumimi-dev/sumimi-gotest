@@ -26,6 +26,14 @@ import (
 	"github.com/sumimi-dev/sumimi-gotest/internal/server"
 )
 
+// measurementTimeout: how long a request may take.
+//
+// **The sweep asks for reports over a long range**, and on a small box a
+// report over three years takes minutes. A timeout that cuts it off turns a
+// slow answer into **no answer**, and the measurement would record a failure
+// instead of a number.
+const measurementTimeout = 15 * time.Minute
+
 // Options for the curve.
 type Options struct {
 	// The binary of the server to measure. Empty means "an already-running
@@ -113,7 +121,7 @@ func measure(ctx context.Context, options Options, rate int) (report.Point, erro
 		baseURL = started.BaseURL
 	}
 
-	api := client.New(baseURL)
+	api := client.NewWithTimeout(baseURL, measurementTimeout)
 	if err := api.Login(ctx, options.User, options.Password); err != nil {
 		return report.Point{}, err
 	}

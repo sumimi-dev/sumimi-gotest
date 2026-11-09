@@ -29,11 +29,25 @@ type Client struct {
 }
 
 // New: a client for the server at the base URL.
+//
+// **Thirty seconds** — long enough for an ordinary request, short enough that
+// a hung server does not hang the tool.
 func New(base string) *Client {
+	return NewWithTimeout(base, 30*time.Second)
+}
+
+// NewWithTimeout: a client with its own timeout.
+//
+// **A measurement needs a longer one.** A report over three years on a small
+// box takes minutes — the SQLite backend answers a three-year summary in
+// 24 seconds on a fast machine and in *over two minutes* on a CI runner. A
+// timeout that cuts it off turns a slow answer into **no answer**, and the
+// measurement would record a failure instead of a number.
+func NewWithTimeout(base string, timeout time.Duration) *Client {
 	return &Client{
 		base: strings.TrimSuffix(base, "/"),
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: timeout,
 			Transport: &http.Transport{
 				MaxIdleConnsPerHost: 256,
 				IdleConnTimeout:     90 * time.Second,
