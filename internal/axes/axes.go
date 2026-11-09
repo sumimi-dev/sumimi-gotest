@@ -18,6 +18,7 @@ package axes
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/sumimi-dev/sumimi-gotest/internal/client"
+	"github.com/sumimi-dev/sumimi-gotest/internal/draw"
 	"github.com/sumimi-dev/sumimi-gotest/internal/report"
 	"github.com/sumimi-dev/sumimi-gotest/internal/server"
 )
@@ -66,7 +68,84 @@ func Run(ctx context.Context, options Options) error {
 		}
 		options.Report.Backends = append(options.Report.Backends, measured)
 	}
+	options.Report.Charts = charts(options.Report.Backends)
 	return nil
+}
+
+// charts: the same numbers, drawn.
+//
+// Three pictures, because the axes have three units: the latency by range
+// (the one that tells the story), the peak memory, and the data on disk.
+func charts(backends []report.AxisBackend) []report.Chart {
+	if len(backends) == 0 {
+		return nil
+	}
+	var out []report.Chart
+
+	// The latency, over the ranges: the labels are the ranges and every
+	// engine is a series.
+	ranges := 0
+	for _, backend := range backends {
+		if len(backend.Reports) > ranges {
+			ranges = len(backend.Reports)
+		}
+	}
+	if ranges > 0 {
+		labels := make([]string, 0, ranges)
+		for index := 0; index < ranges; index++ {
+			labels = append(labels, "")
+		}
+		series := make([]draw.Series, 0, len(backends))
+		for _, backend := range backends {
+			values := make([]float64, 0, ranges)
+			for index := 0; index < ranges; index++ {
+				if index < len(backend.Reports) {
+					values = append(values, float64(backend.Reports[index].Milliseconds))
+					labels[index] = fmt.Sprintf("%d days", backend.Reports[index].Days)
+				} else {
+					values = append(values, 0)
+				}
+			}
+			series = append(series, draw.Series{Name: backend.Backend, Values: values})
+		}
+		picture, explorer := draw.Line("The report over a range", "ms", labels, series)
+		out = append(out, report.Chart{
+			Title:    "The report over a range",
+			Picture:  picture,
+			Explorer: explorer,
+		})
+	}
+
+	// The peak memory.
+	series := make([]draw.Series, 0, len(backends))
+	for _, backend := range backends {
+		series = append(series, draw.Series{
+			Name:   backend.Backend,
+			Values: []float64{megabytes(backend.PeakRSSBytes)},
+		})
+	}
+	picture, explorer := draw.Bar("The peak memory", "MB", []string{"the peak memory"}, series)
+	out = append(out, report.Chart{Title: "The peak memory", Picture: picture, Explorer: explorer})
+
+	// The data on disk.
+	series = series[:0]
+	for _, backend := range backends {
+		series = append(series, draw.Series{
+			Name:   backend.Backend,
+			Values: []float64{megabytes(backend.DataBytes)},
+		})
+	}
+	picture, explorer = draw.Bar("The data on disk", "MB", []string{"the data on disk"}, series)
+	out = append(out, report.Chart{Title: "The data on disk", Picture: picture, Explorer: explorer})
+
+	return out
+}
+
+// megabytes: a number of bytes, in megabytes — rounded, because a chart
+// shows "68" and not "68.25".
+func megabytes(bytes uint64) float64 {
+	value := float64(bytes) / (1024 * 1024)
+	return math.Round(value*10) / 10
 }
 
 // measure: one backend, from an empty directory to a table row.

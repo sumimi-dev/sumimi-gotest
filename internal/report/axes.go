@@ -33,6 +33,8 @@ type AxesReport struct {
 	Visitors int `json:"visitors"`
 	// One column per engine.
 	Backends []AxisBackend `json:"backends"`
+	// The charts — the same numbers, drawn.
+	Charts []Chart `json:"charts,omitempty"`
 	// Anything worth saying that the numbers do not say.
 	Notes string `json:"notes,omitempty"`
 }
@@ -54,6 +56,21 @@ type AxisBackend struct {
 	DatabaseBytes uint64 `json:"databaseBytes,omitempty"`
 	// The reports, over the ranges.
 	Reports []AxisPoint `json:"reports"`
+}
+
+// Chart: one picture — the URL of the SVG and the URL of the explorer.
+//
+// The data lives in the URL, so the chart is a link: it renders in an issue,
+// in a release note and in a repository, with nothing installed. The SVG
+// carries the numbers in a `<metadata>` element, so they can be read back
+// out of the picture.
+type Chart struct {
+	// What the chart shows.
+	Title string `json:"title"`
+	// The picture.
+	Picture string `json:"picture"`
+	// The explorer: the same chart, where the numbers can be hovered.
+	Explorer string `json:"explorer"`
 }
 
 // AxisPoint: one report, over one range.
@@ -139,6 +156,12 @@ func (a AxesReport) Markdown() string {
 			}
 		}
 		out.WriteString("\n")
+	}
+
+	// The charts: the same numbers, drawn.
+	for _, chart := range a.Charts {
+		out.WriteString("\n**" + chart.Title + "**\n\n")
+		out.WriteString(fmt.Sprintf("[![%s](%s)](%s)\n", chart.Title, chart.Picture, chart.Explorer))
 	}
 
 	if a.Notes != "" {

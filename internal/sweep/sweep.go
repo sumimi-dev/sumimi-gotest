@@ -12,10 +12,14 @@ package sweep
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sumimi-dev/sumimi-gotest/internal/client"
+	"github.com/sumimi-dev/sumimi-gotest/internal/draw"
 	"github.com/sumimi-dev/sumimi-gotest/internal/load"
 	"github.com/sumimi-dev/sumimi-gotest/internal/machine"
 	"github.com/sumimi-dev/sumimi-gotest/internal/report"
@@ -73,6 +77,7 @@ func Run(ctx context.Context, options Options) error {
 			return err
 		}
 		options.Report.Points = append(options.Report.Points, point)
+		options.Report.Charts = charts(options.Report.Points)
 		// Let the machine settle before the next point: the last server has
 		// just written tens of thousands of events, and the kernel is still
 		// writing them back.
@@ -190,6 +195,56 @@ func measure(ctx context.Context, options Options, rate int) (report.Point, erro
 		options.Report.ServerVersion = after.Version
 	}
 	return point, nil
+}
+
+// charts: the same numbers, drawn.
+//
+// Two pictures: the peak against the rate (the curve the deployment table is
+// made of) and the rate achieved against the rate offered (where the machine
+// stops keeping up).
+func charts(points []report.Point) []report.Chart {
+	if len(points) == 0 {
+		return nil
+	}
+	labels := make([]string, 0, len(points))
+	peaks := make([]float64, 0, len(points))
+	achieved := make([]float64, 0, len(points))
+	for _, point := range points {
+		labels = append(labels, group(point.Rate)+"/s")
+		peaks = append(peaks, math.Round(float64(point.PeakRSSBytes)/(1024*1024)*10)/10)
+		achieved = append(achieved, math.Round(point.Achieved))
+	}
+
+	picture, explorer := draw.Line("The peak against the rate", "MB", labels, []draw.Series{
+		{Name: "the peak", Values: peaks},
+	})
+	first := report.Chart{
+		Title:    "The peak against the rate",
+		Picture:  picture,
+		Explorer: explorer,
+	}
+
+	picture, explorer = draw.Line("The rate achieved", "requests/s", labels, []draw.Series{
+		{Name: "achieved", Values: achieved},
+	})
+	second := report.Chart{
+		Title:    "The rate achieved",
+		Picture:  picture,
+		Explorer: explorer,
+	}
+	return []report.Chart{first, second}
+}
+
+// group: a number with spaces between the thousands.
+func group(number int64) string {
+	text := fmt.Sprintf("%d", number)
+	var parts []string
+	for len(text) > 3 {
+		parts = append([]string{text[len(text)-3:]}, parts...)
+		text = text[:len(text)-3]
+	}
+	parts = append([]string{text}, parts...)
+	return strings.Join(parts, " ")
 }
 
 // HTTPClient: a client tuned for many connections.

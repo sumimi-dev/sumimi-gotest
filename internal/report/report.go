@@ -70,6 +70,8 @@ type Report struct {
 	ServerVersion string `json:"serverVersion,omitempty"`
 	// The measurements.
 	Points []Point `json:"points"`
+	// The charts — the same numbers, drawn.
+	Charts []Chart `json:"charts,omitempty"`
 	// Anything worth saying that the numbers do not say.
 	Notes string `json:"notes,omitempty"`
 }
@@ -124,6 +126,12 @@ func (r Report) Markdown() string {
 			size(uint64(point.EngineBytes)),
 			fmt.Sprintf("%d ms", point.FlushMaxMS),
 		)
+	}
+
+	// The charts: the same numbers, drawn.
+	for _, chart := range r.Charts {
+		fmt.Fprintf(&out, "\n**%s**\n\n", chart.Title)
+		fmt.Fprintf(&out, "[![%s](%s)](%s)\n", chart.Title, chart.Picture, chart.Explorer)
 	}
 
 	if r.Notes != "" {
