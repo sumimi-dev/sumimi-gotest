@@ -276,6 +276,7 @@ func axesCommand(arguments []string) {
 	days := flags.Int("days", 1095, "how many days of history to seed")
 	visitors := flags.Int("visitors", 1000, "roughly how many visitors a day the history has")
 	ranges := flags.String("ranges", "0.17,0.5,1", "the ranges to measure, as fractions of the history")
+	limits := flags.String("limits", "", "the engine limits to measure, e.g. 512MB,256MB,128MB,64MB (empty: not this time)")
 	memoryLimit := flags.String("memory-limit", "", "the engine's memory limit for the servers this starts")
 	environments := flags.String("env", "", "an environment variable for the server, KEY=VALUE (repeatable, comma separated)")
 	out := flags.String("out", "", "write the Markdown report to this file")
@@ -298,6 +299,7 @@ func axesCommand(arguments []string) {
 		Days:        *days,
 		Visitors:    *visitors,
 		Fractions:   fractions,
+		Limits:      splitList(*limits),
 		MemoryLimit: *memoryLimit,
 		Report:      &document,
 	})

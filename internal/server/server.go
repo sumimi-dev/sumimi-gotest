@@ -42,6 +42,13 @@ type Options struct {
 	Extra []string
 	// Extra environment variables for the server.
 	Environment [][2]string
+	// Keep the instance directory when the server stops.
+	//
+	// **The default is to remove it** — a measurement that does not need the
+	// files afterwards should not leave them behind. But a measurement that
+	// starts *several* servers on the same history (the engine's limits) needs
+	// the directory to outlive the first one.
+	Keep bool
 }
 
 // A running server.
@@ -57,6 +64,7 @@ type Server struct {
 	log     *os.File
 	peak    uint64
 	stopped bool
+	keep    bool
 }
 
 // Start the server and wait until it answers.
@@ -117,6 +125,7 @@ func Start(ctx context.Context, options Options) (*Server, error) {
 		Port:    port,
 		command: command,
 		log:     log,
+		keep:    options.Keep,
 	}
 	if err := server.wait(ctx, 90*time.Second); err != nil {
 		server.Stop()
@@ -178,7 +187,7 @@ func (s *Server) Stop() {
 	if s.log != nil {
 		s.log.Close()
 	}
-	if s.Dir != "" {
+	if s.Dir != "" && !s.keep {
 		_ = os.RemoveAll(s.Dir)
 	}
 }

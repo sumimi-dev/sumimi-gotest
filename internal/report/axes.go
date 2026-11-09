@@ -33,10 +33,32 @@ type AxesReport struct {
 	Visitors int `json:"visitors"`
 	// One column per engine.
 	Backends []AxisBackend `json:"backends"`
+	// The engine's limit, and what it costs — the same history, several
+	// limits.
+	Limits []AxisLimit `json:"limits,omitempty"`
 	// The charts — the same numbers, drawn.
 	Charts []Chart `json:"charts,omitempty"`
 	// Anything worth saying that the numbers do not say.
 	Notes string `json:"notes,omitempty"`
+}
+
+// AxisLimit: one engine limit, on the same history.
+//
+// **The limit does not decide whether the report can be answered** — it
+// decides how fast it is answered and how much disk it costs. So the numbers
+// here are the same answer at every limit, and what changes is the time, the
+// memory and the spill.
+type AxisLimit struct {
+	// The limit: "64MB".
+	Limit string `json:"limit"`
+	// The report over the whole history, at this limit.
+	Days int `json:"days"`
+	// How long it took — the cache was empty.
+	Milliseconds int64 `json:"milliseconds"`
+	// The most the engine ever spilled to disk, in bytes.
+	SpillBytes uint64 `json:"spillBytes,omitempty"`
+	// The server's peak resident set, in bytes.
+	PeakRSSBytes uint64 `json:"peakRssBytes,omitempty"`
 }
 
 // AxisBackend: one engine's numbers.
@@ -156,6 +178,24 @@ func (a AxesReport) Markdown() string {
 			}
 		}
 		out.WriteString("\n")
+	}
+
+	// The limit's trade: the same history, several engine limits.
+	if len(a.Limits) > 0 {
+		out.WriteString("\n## The limit's trade\n\n")
+		out.WriteString("**The same history, the same report, several engine limits.** " +
+			"The answer is the same at every limit — what changes is the time, the " +
+			"memory and the disk.\n\n")
+		out.WriteString("| the engine's limit | the report | the peak memory | the spill on disk |\n")
+		out.WriteString("| --- | ---: | ---: | ---: |\n")
+		for _, limit := range a.Limits {
+			out.WriteString(fmt.Sprintf("| %s | %.1f ms | %s | %s |\n",
+				limit.Limit,
+				float64(limit.Milliseconds),
+				size(limit.PeakRSSBytes),
+				size(limit.SpillBytes),
+			))
+		}
 	}
 
 	// The charts: the same numbers, drawn.

@@ -164,6 +164,23 @@ func (c *Client) Stats(ctx context.Context, website string, startAt, endAt int64
 	return elapsed, nil
 }
 
+// PurgeCache: `DELETE /api/cache` — empty the report cache.
+//
+// **The cache is on disk, in the instance directory** ⇒ ⇒ ⇒ so it survives
+// the server that filled it ⇒ ⇒ ⇒ ⇒ a second server on the same directory
+// would answer from it ⇒ ⇒ ⇒ ⇒ and the answer would be the *first* server's
+// ⇒ ⇒ ⇒ ⇒ which is exactly the number a measurement must not use ⇒ ⇒ ⇒ ⇒
+func (c *Client) PurgeCache(ctx context.Context) error {
+	answer, status, err := c.do(ctx, http.MethodDelete, "/api/cache", nil, c.token)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("the cache would not empty: %d %s", status, answer)
+	}
+	return nil
+}
+
 // Heartbeat: `GET /api/heartbeat` — what the server says about itself.
 //
 // This is the endpoint the reports are built on: it carries the server's

@@ -18,11 +18,14 @@ package axes
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/sumimi-dev/sumimi-gotest/internal/client"
@@ -51,6 +54,13 @@ type Options struct {
 	// The ranges to measure, as fractions of the history: 0.17 is about six
 	// months of a three-year history, 1 is all of it.
 	Fractions []float64
+	// The engine limits to measure, e.g. "512MB,256MB,64MB". Empty means
+	// "not this time".
+	//
+	// **The limit is not a test of whether the report fits** — DuckDB spills
+	// to disk and answers anyway. It is a test of what the limit costs: the
+	// time, and the disk.
+	Limits []string
 	// The engine's memory limit for the servers this starts.
 	MemoryLimit string
 	// The environment for the servers this starts.
@@ -61,14 +71,30 @@ type Options struct {
 
 // Run the measurement, one backend at a time.
 func Run(ctx context.Context, options Options) error {
+	// The DuckDB directory is kept for the limits: the limits are measured on
+	// the same history, so the same seed.
+	var duckDirectory string
 	for _, backend := range options.Backends {
-		measured, err := measure(ctx, options, backend)
+		measured, directory, err := measure(ctx, options, backend)
 		if err != nil {
 			return fmt.Errorf("the %s backend: %w", backend, err)
 		}
 		options.Report.Backends = append(options.Report.Backends, measured)
+		if backend == "duckdb" && directory != "" {
+			duckDirectory = directory
+		} else if directory != "" {
+			os.RemoveAll(directory)
+		}
+	}
+	if len(options.Limits) > 0 && duckDirectory != "" {
+		limits, err := measureLimits(ctx, options, duckDirectory)
+		if err != nil {
+			return err
+		}
+		options.Report.Limits = limits
 	}
 	options.Report.Charts = charts(options.Report.Backends)
+	options.Report.Charts = append(options.Report.Charts, limitCharts(options.Report.Limits)...)
 	return nil
 }
 
@@ -195,7 +221,10 @@ func megabytes(bytes uint64) float64 {
 }
 
 // measure: one backend, from an empty directory to a table row.
-func measure(ctx context.Context, options Options, backend string) (report.AxisBackend, error) {
+//
+// It also returns the directory it seeded, so the limits can be measured on
+// the same history — the caller removes it.
+func measure(ctx context.Context, options Options, backend string) (report.AxisBackend, string, error) {
 	measured := report.AxisBackend{Backend: backend}
 
 	// The server this measures.
@@ -207,7 +236,7 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 		var err error
 		directory, err = seed(ctx, options, backend)
 		if err != nil {
-			return measured, err
+			return measured, "", err
 		}
 		started, err = server.Start(ctx, server.Options{
 			Binary:      options.Binary,
@@ -216,30 +245,33 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 			Environment: options.Environment,
 			Extra:       []string{"--backend", backend},
 			Directory:   directory,
+			// The directory has to outlive the server: the limits are
+			// measured on it.
+			Keep: true,
 		})
 		if err != nil {
 			os.RemoveAll(directory)
-			return measured, err
+			return measured, "", err
 		}
 		defer started.Stop()
 		baseURL = started.BaseURL
 	} else if len(options.Backends) > 1 {
-		return measured, fmt.Errorf("an already-running server can only be one backend")
+		return measured, "", fmt.Errorf("an already-running server can only be one backend")
 	}
 
 	api := client.New(baseURL)
 	if err := api.Login(ctx, options.User, options.Password); err != nil {
-		return measured, err
+		return measured, directory, err
 	}
 
 	// The website the history belongs to: the seed made one, and the tool
 	// does not have to know its id.
 	websites, err := api.Websites(ctx)
 	if err != nil {
-		return measured, err
+		return measured, directory, err
 	}
 	if len(websites) == 0 {
-		return measured, fmt.Errorf("the server has no website")
+		return measured, directory, fmt.Errorf("the server has no website")
 	}
 	website := websites[0].ID
 
@@ -255,7 +287,7 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 		start := end.AddDate(0, 0, -days)
 		elapsed, err := api.Stats(ctx, website, start.UnixMilli(), end.UnixMilli())
 		if err != nil {
-			return measured, err
+			return measured, directory, err
 		}
 		measured.Reports = append(measured.Reports, report.AxisPoint{
 			Days:         days,
@@ -266,7 +298,7 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 	// The server's own account of itself.
 	heartbeat, err := api.Heartbeat(ctx)
 	if err != nil {
-		return measured, err
+		return measured, directory, err
 	}
 	measured.PeakRSSBytes = heartbeat.PeakRSSBytes
 	measured.RSSBytes = heartbeat.RSSBytes
@@ -288,9 +320,196 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 			options.Report.Notes = "The peak is the kernel's `ru_maxrss` — the server cannot " +
 				"report its own high-water mark on this platform."
 		}
-		os.RemoveAll(directory)
 	}
-	return measured, nil
+	return measured, directory, nil
+}
+
+// measureLimits: the same history, several engine limits.
+//
+// **The limit does not decide whether the report can be answered.** DuckDB
+// spills to disk and answers anyway — what the limit decides is how long the
+// answer takes and how much disk it costs on the way.
+//
+// So every limit gets its own server, on the same directory, and the same
+// report. **The report cache is emptied before each one**: the cache lives in
+// the instance directory, so it survives the server that filled it — and a
+// second server would answer from it, which is the wrong number.
+func measureLimits(ctx context.Context, options Options, directory string) ([]report.AxisLimit, error) {
+	var out []report.AxisLimit
+	for _, limit := range options.Limits {
+		// The spill of the last limit, if the server was killed before it
+		// could clean up.
+		removeSpill(directory)
+
+		started, err := server.Start(ctx, server.Options{
+			Binary:      options.Binary,
+			Password:    options.Password,
+			MemoryLimit: limit,
+			Environment: options.Environment,
+			Extra:       []string{"--backend", "duckdb"},
+			Directory:   directory,
+			Keep:        true,
+		})
+		if err != nil {
+			return out, err
+		}
+
+		api := client.New(started.BaseURL)
+		if err := api.Login(ctx, options.User, options.Password); err != nil {
+			started.Stop()
+			return out, err
+		}
+		websites, err := api.Websites(ctx)
+		if err != nil || len(websites) == 0 {
+			started.Stop()
+			if err == nil {
+				err = fmt.Errorf("the server has no website")
+			}
+			return out, err
+		}
+		website := websites[0].ID
+
+		// The cache: the first server's answers must not answer for this one.
+		if err := api.PurgeCache(ctx); err != nil {
+			started.Stop()
+			return out, err
+		}
+
+		// The watcher: the most the engine ever spilled. The spill is
+		// temporary — DuckDB deletes it when the query ends — so it has to be
+		// watched, not looked at afterwards.
+		stop := make(chan struct{})
+		var watcher sync.WaitGroup
+		var spilled uint64
+		watcher.Add(1)
+		go func() {
+			defer watcher.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if size := spillBytes(directory); size > spilled {
+					spilled = size
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}()
+
+		end := time.Now()
+		start := end.AddDate(0, 0, -options.Days)
+		elapsed, err := api.Stats(ctx, website, start.UnixMilli(), end.UnixMilli())
+		close(stop)
+		watcher.Wait()
+		if err != nil {
+			started.Stop()
+			return out, err
+		}
+
+		// The peak: the server's own account of itself, or the kernel's.
+		peak := uint64(0)
+		if heartbeat, err := api.Heartbeat(ctx); err == nil {
+			peak = heartbeat.PeakRSSBytes
+		}
+		started.Stop()
+		if peak == 0 {
+			peak = started.PeakBytes()
+		}
+
+		out = append(out, report.AxisLimit{
+			Limit:        limit,
+			Days:         options.Days,
+			Milliseconds: elapsed.Milliseconds(),
+			SpillBytes:   spilled,
+			PeakRSSBytes: peak,
+		})
+	}
+	return out, nil
+}
+
+// spillBytes: how much the engine spilled to disk.
+//
+// DuckDB's temporary directory sits next to the database file and is called
+// `<file>.tmp` — but the name is DuckDB's business, not ours, so the tool
+// looks for any directory that ends in `.tmp` and measures what is in it.
+func spillBytes(directory string) uint64 {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return 0
+	}
+	var total uint64
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tmp") {
+			continue
+		}
+		total += treeBytes(filepath.Join(directory, entry.Name()))
+	}
+	return total
+}
+
+// treeBytes: the size of everything under a directory.
+func treeBytes(root string) uint64 {
+	var total uint64
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += uint64(info.Size())
+		}
+		return nil
+	})
+	return total
+}
+
+// removeSpill: the spill of an earlier run, if it is still there.
+func removeSpill(directory string) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+			_ = os.RemoveAll(filepath.Join(directory, entry.Name()))
+		}
+	}
+}
+
+// limitCharts: the limit's trade, drawn.
+//
+// **The bars are the sizes and the line is the time.** The units go in the
+// series' names and not on the axis: the axis is shared, and one axis cannot
+// be both megabytes and milliseconds.
+func limitCharts(limits []report.AxisLimit) []report.Chart {
+	if len(limits) == 0 {
+		return nil
+	}
+	labels := make([]string, 0, len(limits))
+	memory := make([]float64, 0, len(limits))
+	spill := make([]float64, 0, len(limits))
+	latency := make([]float64, 0, len(limits))
+	for _, limit := range limits {
+		labels = append(labels, limit.Limit)
+		memory = append(memory, megabytes(limit.PeakRSSBytes))
+		spill = append(spill, megabytes(limit.SpillBytes))
+		latency = append(latency, float64(limit.Milliseconds))
+	}
+	picture, explorer := draw.Combo(
+		"The limit trades memory for time and disk",
+		"",
+		labels,
+		[]draw.Series{
+			{Name: "the peak memory (MB)", Values: memory},
+			{Name: "the spill on disk (MB)", Values: spill},
+		},
+		draw.Series{Name: "the report (ms)", Values: latency},
+	)
+	return []report.Chart{{
+		Title:    "The limit's trade — the sizes as bars, the time as the line",
+		Picture:  picture,
+		Explorer: explorer,
+	}}
 }
 
 // seed: fill a directory with the history to measure.
