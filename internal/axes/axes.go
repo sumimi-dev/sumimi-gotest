@@ -74,16 +74,57 @@ func Run(ctx context.Context, options Options) error {
 
 // charts: the same numbers, drawn.
 //
-// Three pictures, because the axes have three units: the latency by range
-// (the one that tells the story), the peak memory, and the data on disk.
+// **Two mixed charts**, because the axes have three units and a line on the
+// bars' scale would be a lie:
+//
+//  1. the four axes — the bars are the sizes (MB), the line is the latency
+//     (ms) on its own axis;
+//  2. the report over a range — the bars are the two engines, the line is how
+//     many times slower the other one is.
 func charts(backends []report.AxisBackend) []report.Chart {
 	if len(backends) == 0 {
 		return nil
 	}
 	var out []report.Chart
 
-	// The latency, over the ranges: the labels are the ranges and every
-	// engine is a series.
+	// The labels: the engines.
+	labels := make([]string, 0, len(backends))
+	for _, backend := range backends {
+		labels = append(labels, backend.Backend)
+	}
+
+	// The four axes: the sizes as bars, the latency as the line.
+	memory := make([]float64, 0, len(backends))
+	disk := make([]float64, 0, len(backends))
+	latency := make([]float64, 0, len(backends))
+	for _, backend := range backends {
+		memory = append(memory, megabytes(backend.PeakRSSBytes))
+		disk = append(disk, megabytes(backend.DataBytes))
+		longest := int64(0)
+		for _, report := range backend.Reports {
+			if report.Milliseconds > longest {
+				longest = report.Milliseconds
+			}
+		}
+		latency = append(latency, float64(longest))
+	}
+	picture, explorer := draw.Combo(
+		"The four axes",
+		"MB",
+		labels,
+		[]draw.Series{
+			{Name: "the peak memory", Values: memory},
+			{Name: "the data on disk", Values: disk},
+		},
+		draw.Series{Name: "the longest report (ms)", Values: latency},
+	)
+	out = append(out, report.Chart{
+		Title:    "The four axes — the sizes as bars, the latency as the line",
+		Picture:  picture,
+		Explorer: explorer,
+	})
+
+	// The report over a range: the two engines' bars, and the ratio.
 	ranges := 0
 	for _, backend := range backends {
 		if len(backend.Reports) > ranges {
@@ -91,52 +132,57 @@ func charts(backends []report.AxisBackend) []report.Chart {
 		}
 	}
 	if ranges > 0 {
-		labels := make([]string, 0, ranges)
+		rangeLabels := make([]string, 0, ranges)
 		for index := 0; index < ranges; index++ {
-			labels = append(labels, "")
+			rangeLabels = append(rangeLabels, "")
 		}
 		series := make([]draw.Series, 0, len(backends))
+		ratio := make([]float64, 0, ranges)
 		for _, backend := range backends {
 			values := make([]float64, 0, ranges)
 			for index := 0; index < ranges; index++ {
 				if index < len(backend.Reports) {
 					values = append(values, float64(backend.Reports[index].Milliseconds))
-					labels[index] = fmt.Sprintf("%d days", backend.Reports[index].Days)
+					rangeLabels[index] = fmt.Sprintf("%d days", backend.Reports[index].Days)
 				} else {
 					values = append(values, 0)
 				}
 			}
 			series = append(series, draw.Series{Name: backend.Backend, Values: values})
 		}
-		picture, explorer := draw.Line("The report over a range", "ms", labels, series)
+		// The ratio: the first engine against the fastest one.
+		for index := 0; index < ranges; index++ {
+			fastest := 0.0
+			for _, one := range series {
+				if one.Values[index] > 0 && (fastest == 0 || one.Values[index] < fastest) {
+					fastest = one.Values[index]
+				}
+			}
+			slowest := 0.0
+			for _, one := range series {
+				if one.Values[index] > slowest {
+					slowest = one.Values[index]
+				}
+			}
+			if fastest > 0 {
+				ratio = append(ratio, math.Round(slowest/fastest))
+			} else {
+				ratio = append(ratio, 0)
+			}
+		}
+		picture, explorer = draw.Combo(
+			"The report over a range",
+			"ms",
+			rangeLabels,
+			series,
+			draw.Series{Name: "how many times slower", Values: ratio},
+		)
 		out = append(out, report.Chart{
-			Title:    "The report over a range",
+			Title:    "The report over a range — the bars are the engines, the line is the ratio",
 			Picture:  picture,
 			Explorer: explorer,
 		})
 	}
-
-	// The peak memory.
-	series := make([]draw.Series, 0, len(backends))
-	for _, backend := range backends {
-		series = append(series, draw.Series{
-			Name:   backend.Backend,
-			Values: []float64{megabytes(backend.PeakRSSBytes)},
-		})
-	}
-	picture, explorer := draw.Bar("The peak memory", "MB", []string{"the peak memory"}, series)
-	out = append(out, report.Chart{Title: "The peak memory", Picture: picture, Explorer: explorer})
-
-	// The data on disk.
-	series = series[:0]
-	for _, backend := range backends {
-		series = append(series, draw.Series{
-			Name:   backend.Backend,
-			Values: []float64{megabytes(backend.DataBytes)},
-		})
-	}
-	picture, explorer = draw.Bar("The data on disk", "MB", []string{"the data on disk"}, series)
-	out = append(out, report.Chart{Title: "The data on disk", Picture: picture, Explorer: explorer})
 
 	return out
 }

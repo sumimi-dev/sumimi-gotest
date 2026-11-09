@@ -34,10 +34,43 @@ type Series struct {
 //
 // The style is the x-cmd one (`t=evil`): the charts in a report should look
 // like the project's other pictures.
+//
+// **The combo is the exception.** With `t=evil` the combo drops every bar
+// series but the first and never draws the second y-axis — so the line's
+// numbers end up on the bars' scale, which is worse than no chart at all
+// (reported: https://github.com/x-cmd/draw/issues/6). The combo therefore
+// keeps the default style, where both work.
 func URL(chartType string, title string, unit string, labels []string, series []Series) (string, string) {
+	return build(chartType, title, unit, labels, series, "", nil)
+}
+
+// Combo: a mixed chart — bars and a line, on two axes.
+//
+// The bars are the quantities; the line is the one that lives on another
+// scale (a latency next to a size, a ratio next to a count). When the scales
+// differ enough, the line gets its own axis — otherwise its numbers would be
+// read on the bars' scale, which is a lie.
+func Combo(title string, unit string, labels []string, bars []Series, line Series) (string, string) {
+	return build("combo", title, unit, labels, bars, line.Name, line.Values)
+}
+
+// build: the URL for a chart.
+//
+// The style is empty for the combo (see [`URL`]).
+func build(
+	chartType string,
+	title string,
+	unit string,
+	labels []string,
+	series []Series,
+	lineName string,
+	lineValues []float64,
+) (string, string) {
 	values := url.Values{}
 	values.Set("type", chartType)
-	values.Set("t", "evil")
+	if chartType != "combo" {
+		values.Set("t", "evil")
+	}
 	if title != "" {
 		values.Set("title", title)
 	}
@@ -48,14 +81,25 @@ func URL(chartType string, title string, unit string, labels []string, series []
 		values.Set("labels", strings.Join(labels, ","))
 	}
 	for _, one := range series {
-		numbers := make([]string, 0, len(one.Values))
-		for _, value := range one.Values {
-			numbers = append(numbers, format(value))
-		}
-		values.Add("series", one.Name+":"+strings.Join(numbers, ","))
+		values.Add("series", one.Name+":"+strings.Join(numbers(one.Values), ","))
 	}
+	if lineName != "" {
+		values.Set("line", lineName+":"+strings.Join(numbers(lineValues), ","))
+	}
+	// The canvas: wide enough for the legend, tall enough for the plot.
+	values.Set("w", "960")
+	values.Set("h", "520")
 	query := values.Encode()
 	return service + "?" + query, service + "/explore?" + query
+}
+
+// numbers: a series' values, as text.
+func numbers(values []float64) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, format(value))
+	}
+	return out
 }
 
 // Line: a line chart — a trend over the labels.
