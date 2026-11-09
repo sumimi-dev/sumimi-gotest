@@ -31,6 +31,13 @@ type Options struct {
 	MemoryLimit string
 	// The rate the gate admits. Zero means "the recommended one".
 	AdmitRPS int
+	// The instance directory to serve. Empty means "a fresh temporary one" —
+	// which is what a rate curve wants, because every point of the curve
+	// needs a server that has never served anything.
+	//
+	// A measurement that needs a **history** (the reports over a long range)
+	// points this at a directory it has already filled.
+	Directory string
 	// Extra arguments for the server.
 	Extra []string
 	// Extra environment variables for the server.
@@ -57,17 +64,22 @@ func Start(ctx context.Context, options Options) (*Server, error) {
 	if options.Binary == "" {
 		return nil, fmt.Errorf("no binary to run")
 	}
-	directory, err := os.MkdirTemp("", "sumimi-gotest-")
-	if err != nil {
-		return nil, err
+	directory := options.Directory
+	if directory == "" {
+		created, err := os.MkdirTemp("", "sumimi-gotest-")
+		if err != nil {
+			return nil, err
+		}
+		directory = created
 	}
 	port := options.Port
 	if port == 0 {
-		port, err = FreePort()
+		free, err := FreePort()
 		if err != nil {
 			os.RemoveAll(directory)
 			return nil, err
 		}
+		port = free
 	}
 
 	arguments := append([]string{"serve", "--dir", directory, "--port", strconv.Itoa(port)}, options.Extra...)

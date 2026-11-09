@@ -113,6 +113,57 @@ func (c *Client) CreateWebsite(ctx context.Context, name string) (string, error)
 	return parsed.ID, nil
 }
 
+// Website: one site the server knows.
+type Website struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Websites: `GET /api/websites` — the list, with their ids.
+//
+// The answer is a bare list on a current server and an object with a
+// "websites" key on an older one; both are read, because the tool has to
+// work against whatever version it is pointed at.
+func (c *Client) Websites(ctx context.Context) ([]Website, error) {
+	answer, status, err := c.do(ctx, http.MethodGet, "/api/websites", nil, c.token)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("the websites were refused: %d %s", status, answer)
+	}
+	var list []Website
+	if err := json.Unmarshal(answer, &list); err == nil {
+		return list, nil
+	}
+	var wrapped struct {
+		Websites []Website `json:"websites"`
+	}
+	if err := json.Unmarshal(answer, &wrapped); err != nil {
+		return nil, fmt.Errorf("the answer is not JSON: %w", err)
+	}
+	return wrapped.Websites, nil
+}
+
+// Stats: `GET /api/websites/{id}/stats` — one report, and how long it took.
+//
+// The **first** call for a range is the slow one: the report cache is cold
+// until the answer is written to it. So the caller wants the duration of the
+// first call, not of a later one — and every range is asked for once.
+func (c *Client) Stats(ctx context.Context, website string, startAt, endAt int64) (time.Duration, error) {
+	path := fmt.Sprintf("/api/websites/%s/stats?startAt=%d&endAt=%d", website, startAt, endAt)
+	started := time.Now()
+	answer, status, err := c.do(ctx, http.MethodGet, path, nil, c.token)
+	elapsed := time.Since(started)
+	if err != nil {
+		return elapsed, err
+	}
+	if status != http.StatusOK {
+		return elapsed, fmt.Errorf("the report was refused: %d %s", status, answer)
+	}
+	return elapsed, nil
+}
+
 // Heartbeat: `GET /api/heartbeat` — what the server says about itself.
 //
 // This is the endpoint the reports are built on: it carries the server's

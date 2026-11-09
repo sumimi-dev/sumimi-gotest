@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sumimi-dev/sumimi-gotest/internal/axes"
 	"github.com/sumimi-dev/sumimi-gotest/internal/client"
 	"github.com/sumimi-dev/sumimi-gotest/internal/load"
 	"github.com/sumimi-dev/sumimi-gotest/internal/report"
@@ -44,6 +45,8 @@ func main() {
 		probeCommand(arguments)
 	case "sweep":
 		sweepCommand(arguments)
+	case "axes":
+		axesCommand(arguments)
 	case "version", "--version":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -62,6 +65,7 @@ func usage() {
   load   --host 127.0.0.1 --port 3000 --rate 20000 --seconds 20
   probe  --host 127.0.0.1 --port 3000
   sweep  --host 127.0.0.1 --port 3000 --rates 5000,10000,20000 --out report.md
+  axes   --binary ./sumimi --backends duckdb,sqlite --days 1095 --out axes.md
 
 The password comes from SUMIMI_ADMIN_PASSWORD when the flag is not given.
 `)
@@ -255,6 +259,106 @@ func sweepCommand(arguments []string) {
 		}
 		fmt.Printf("the machine:    %s\n", *jsonOut)
 	}
+}
+
+// axesCommand: the trade between the engines, on the same data.
+//
+// The history is **seeded** first — the binary that serves also seeds —
+// because a report over a long range is the only thing that shows the
+// difference between the engines: on a few seconds of data, both answer in
+// single-digit milliseconds.
+func axesCommand(arguments []string) {
+	flags := flag.NewFlagSet("axes", flag.ExitOnError)
+	var server serverFlags
+	server.add(flags)
+	binary := flags.String("binary", "", "the server binary to measure (it seeds the history too)")
+	backends := flags.String("backends", "duckdb,sqlite", "the engines to measure")
+	days := flags.Int("days", 1095, "how many days of history to seed")
+	visitors := flags.Int("visitors", 1000, "roughly how many visitors a day the history has")
+	ranges := flags.String("ranges", "0.17,0.5,1", "the ranges to measure, as fractions of the history")
+	memoryLimit := flags.String("memory-limit", "", "the engine's memory limit for the servers this starts")
+	environments := flags.String("env", "", "an environment variable for the server, KEY=VALUE (repeatable, comma separated)")
+	out := flags.String("out", "", "write the Markdown report to this file")
+	jsonOut := flags.String("json", "", "write the JSON report to this file")
+	_ = flags.Parse(arguments)
+
+	fractions, err := parseFractions(*ranges)
+	if err != nil {
+		fail("%v", err)
+	}
+
+	document := report.NewAxes("sumimi-gotest", version, *days, *visitors)
+	err = axes.Run(context.Background(), axes.Options{
+		Environment: splitEnvironment(*environments),
+		Binary:      *binary,
+		BaseURL:     server.baseURL(),
+		User:        *server.user,
+		Password:    *server.password,
+		Backends:    splitList(*backends),
+		Days:        *days,
+		Visitors:    *visitors,
+		Fractions:   fractions,
+		MemoryLimit: *memoryLimit,
+		Report:      &document,
+	})
+	if err != nil {
+		fail("the measurement failed: %v", err)
+	}
+
+	markdown := document.Markdown()
+	if *out == "" {
+		fmt.Print(markdown)
+	} else if err := os.WriteFile(*out, []byte(markdown), 0o644); err != nil {
+		fail("could not write %s: %v", *out, err)
+	} else {
+		fmt.Printf("the report:     %s\n", *out)
+	}
+	if *jsonOut != "" {
+		encoded, err := document.JSON()
+		if err != nil {
+			fail("could not write the report: %v", err)
+		}
+		if err := os.WriteFile(*jsonOut, encoded, 0o644); err != nil {
+			fail("could not write %s: %v", *jsonOut, err)
+		}
+		fmt.Printf("the machine:    %s\n", *jsonOut)
+	}
+}
+
+// parseFractions: the ranges, as fractions of the history.
+func parseFractions(text string) ([]float64, error) {
+	var fractions []float64
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		fraction, err := strconv.ParseFloat(part, 64)
+		if err != nil {
+			return nil, fmt.Errorf("the range %q is not a number", part)
+		}
+		if fraction <= 0 || fraction > 1 {
+			return nil, fmt.Errorf("the range %f is not a fraction of the history", fraction)
+		}
+		fractions = append(fractions, fraction)
+	}
+	if len(fractions) == 0 {
+		return nil, fmt.Errorf("no ranges to measure")
+	}
+	return fractions, nil
+}
+
+// splitList: a comma separated list.
+func splitList(text string) []string {
+	var list []string
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		list = append(list, part)
+	}
+	return list
 }
 
 // parseRates: the rates of the curve.
