@@ -32,14 +32,16 @@ type Series struct {
 
 // URL: the chart's URL, and the explorer's, for the given type.
 //
-// The style is the x-cmd one (`t=evil`): the charts in a report should look
-// like the project's other pictures.
+// **The default style, not `t=evil`.** Two reasons, both measured:
 //
-// **The combo is the exception.** With `t=evil` the combo drops every bar
-// series but the first and never draws the second y-axis — so the line's
-// numbers end up on the bars' scale, which is worse than no chart at all
-// (reported: https://github.com/x-cmd/draw/issues/6). The combo therefore
-// keeps the default style, where both work.
+//   - with `t=evil` the combo drops every bar series but the first and never
+//     draws the second y-axis — so the line's numbers end up on the bars'
+//     scale, which is worse than no chart at all (reported:
+//     https://github.com/x-cmd/draw/issues/6);
+//   - the `evil` line chart draws stray grey dots under the axis.
+//
+// The default style has neither. The look is a little plainer; a chart that
+// says the wrong number is worth less than a plain one.
 func URL(chartType string, title string, unit string, labels []string, series []Series) (string, string) {
 	return build(chartType, title, unit, labels, series, "", nil)
 }
@@ -68,9 +70,6 @@ func build(
 ) (string, string) {
 	values := url.Values{}
 	values.Set("type", chartType)
-	if chartType != "combo" {
-		values.Set("t", "evil")
-	}
 	if title != "" {
 		values.Set("title", title)
 	}
