@@ -123,6 +123,11 @@ func (a AxesReport) Markdown() string {
 	out.WriteString("# The engines, four axes\n\n")
 	out.WriteString(fmt.Sprintf("**The history**: %d days, about %d visitors a day.\n\n",
 		a.Days, a.Visitors))
+	out.WriteString("**What a report is**: the summary (`/api/websites/{id}/stats`) over a " +
+		"time window — the same one the dashboard's overview asks for. The window " +
+		"holds **everything** in it, so the longer the window the more there is to " +
+		"aggregate. Each number below is the **first** call for that window (the " +
+		"cache was cold); the calls after it answer in under a millisecond.\n\n")
 	out.WriteString(fmt.Sprintf("**The machine**: %s.\n\n", a.Client.String()))
 	if a.ServerVersion != "" {
 		// **The version the numbers belong to.**

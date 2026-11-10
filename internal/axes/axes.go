@@ -146,13 +146,25 @@ func charts(backends []report.AxisBackend) []report.Chart {
 		labels = append(labels, backend.Backend)
 		memory = append(memory, gigabytes(backend.PeakRSSBytes))
 		disk = append(disk, gigabytes(backend.DataBytes))
-		slowest := int64(0)
+		// **The report over the longest range** — not the slowest one.
+		//
+		// They are not the same: on the SQLite side the one-year report is
+		// slower than the three-year one (the previous period it compares
+		// against is a different amount of work), so "the longest" has to
+		// mean the longest **range**, or the chart says something the table
+		// does not.
+		widest := 0
 		for _, report := range backend.Reports {
-			if report.Milliseconds > slowest {
-				slowest = report.Milliseconds
+			if report.Days > widest {
+				widest = report.Days
 			}
 		}
-		longest = append(longest, float64(slowest))
+		for _, report := range backend.Reports {
+			if report.Days == widest {
+				longest = append(longest, float64(report.Milliseconds))
+				break
+			}
+		}
 	}
 
 	// The four axes: the sizes as bars, the latency as the line.
@@ -163,7 +175,7 @@ func charts(backends []report.AxisBackend) []report.Chart {
 			{Name: "the peak memory (GB)", Values: memory},
 			{Name: "the data on disk (GB)", Values: disk},
 		},
-		draw.Series{Name: "the longest report (ms)", Values: longest},
+		draw.Series{Name: "the report over the longest range (ms)", Values: longest},
 	)
 	out = append(out, report.Chart{
 		Title:    "The four axes — the sizes as bars, the latency as the line",
