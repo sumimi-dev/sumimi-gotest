@@ -89,6 +89,9 @@ func Run(ctx context.Context, options Options) error {
 			return fmt.Errorf("the %s backend: %w", backend, err)
 		}
 		options.Report.Backends = append(options.Report.Backends, measured)
+		if options.Report.ServerVersion == "" {
+			options.Report.ServerVersion = measured.ServerVersion
+		}
 		if backend == "duckdb" && directory != "" {
 			duckDirectory = directory
 		} else if directory != "" {
@@ -109,13 +112,25 @@ func Run(ctx context.Context, options Options) error {
 
 // charts: the same numbers, drawn.
 //
-// **Two mixed charts**, because the axes have three units and a line on the
-// bars' scale would be a lie:
+// **One chart, one question.** The four axes are four comparisons, and they do
+// not share a scale: the memory is hundreds of megabytes, the disk is
+// gigabytes, the latency is tens of seconds. On one axis the small bars
+// vanish — and with them the value labels, because the service labels a layer
+// only if every label fits (https://github.com/x-cmd/draw/issues/10). So each
+// comparison gets its own chart.
 //
-//  1. the four axes — the bars are the sizes (MB), the line is the latency
-//     (ms) on its own axis;
-//  2. the report over a range — the bars are the two engines, the line is how
-//     many times slower the other one is.
+// Three rules, all of them from what the service actually draws:
+//
+//   - **the unit is in the legend, in parentheses** — a combo never draws the
+//     unit on the axis, so the legend is the only place the reader can find
+//     it;
+//   - **the unit is chosen so no number is abbreviated** — the service writes
+//     a thousand as "1k", and beside a byte unit that reads like a prefix
+//     ("kilo-megabyte") rather than a number. So the disk is in **gigabytes**
+//     (3 148 MB would be written "3.1k") and the memory in megabytes;
+//   - **the two axes differ by at least five times** — that is when the
+//     service draws a second axis at all. Below that, the line's numbers would
+//     be read on the bars' scale, which is a lie.
 func charts(backends []report.AxisBackend) []report.Chart {
 	if len(backends) == 0 {
 		return nil
@@ -124,37 +139,39 @@ func charts(backends []report.AxisBackend) []report.Chart {
 
 	// The labels: the engines.
 	labels := make([]string, 0, len(backends))
-	for _, backend := range backends {
-		labels = append(labels, backend.Backend)
-	}
-
-	// The four axes: the sizes as bars, the latency as the line.
 	memory := make([]float64, 0, len(backends))
 	disk := make([]float64, 0, len(backends))
-	latency := make([]float64, 0, len(backends))
 	for _, backend := range backends {
+		labels = append(labels, backend.Backend)
 		memory = append(memory, megabytes(backend.PeakRSSBytes))
-		disk = append(disk, megabytes(backend.DataBytes))
-		longest := int64(0)
-		for _, report := range backend.Reports {
-			if report.Milliseconds > longest {
-				longest = report.Milliseconds
-			}
-		}
-		latency = append(latency, float64(longest))
+		disk = append(disk, gigabytes(backend.DataBytes))
 	}
+
+	// The peak memory: one scale, one question. Megabytes — the largest is
+	// under a thousand, so nothing is abbreviated.
 	picture, explorer := draw.Combo(
-		"The four axes",
-		"MB",
+		"The peak memory",
 		labels,
-		[]draw.Series{
-			{Name: "the peak memory", Values: memory},
-			{Name: "the data on disk", Values: disk},
-		},
-		draw.Series{Name: "the longest report (ms)", Values: latency},
+		[]draw.Series{{Name: "the peak memory (MB)", Values: memory}},
+		draw.Series{},
 	)
 	out = append(out, report.Chart{
-		Title:    "The four axes — the sizes as bars, the latency as the line",
+		Title:    "The peak memory — the bars are the two engines",
+		Picture:  picture,
+		Explorer: explorer,
+	})
+
+	// The data on disk: the same question, and the disk is ten times bigger,
+	// so it gets its own chart and its own unit — gigabytes, so that "3.1k MB"
+	// is never written.
+	picture, explorer = draw.Combo(
+		"The data on disk",
+		labels,
+		[]draw.Series{{Name: "the data on disk (GB)", Values: disk}},
+		draw.Series{},
+	)
+	out = append(out, report.Chart{
+		Title:    "The data on disk — the bars are the two engines",
 		Picture:  picture,
 		Explorer: explorer,
 	})
@@ -183,7 +200,10 @@ func charts(backends []report.AxisBackend) []report.Chart {
 					values = append(values, 0)
 				}
 			}
-			series = append(series, draw.Series{Name: backend.Backend, Values: values})
+			series = append(series, draw.Series{
+				Name:   backend.Backend + " (ms)",
+				Values: values,
+			})
 		}
 		// The ratio: the first engine against the fastest one.
 		for index := 0; index < ranges; index++ {
@@ -207,7 +227,6 @@ func charts(backends []report.AxisBackend) []report.Chart {
 		}
 		picture, explorer = draw.Combo(
 			"The report over a range",
-			"ms",
 			rangeLabels,
 			series,
 			draw.Series{Name: "how many times slower", Values: ratio},
@@ -227,6 +246,13 @@ func charts(backends []report.AxisBackend) []report.Chart {
 func megabytes(bytes uint64) float64 {
 	value := float64(bytes) / (1024 * 1024)
 	return math.Round(value*10) / 10
+}
+
+// gigabytes: a number of bytes, in gigabytes — for the quantities that do not
+// fit in a thousand megabytes without being written "3.1k".
+func gigabytes(bytes uint64) float64 {
+	value := float64(bytes) / (1024 * 1024 * 1024)
+	return math.Round(value*100) / 100
 }
 
 // measure: one backend, from an empty directory to a table row.
@@ -313,6 +339,9 @@ func measure(ctx context.Context, options Options, backend string) (report.AxisB
 	measured.RSSBytes = heartbeat.RSSBytes
 	measured.EngineBytes = heartbeat.Memory
 	measured.DatabaseBytes = uint64(heartbeat.Database)
+	// **The version the numbers belong to.** A measurement without it is a
+	// number without a subject.
+	measured.ServerVersion = heartbeat.Version
 
 	// The data on disk: the database file and the write-ahead log next to
 	// it. The heartbeat counts the database; the log is the other half of
@@ -488,8 +517,15 @@ func removeSpill(directory string) {
 // limitCharts: the limit's trade, drawn.
 //
 // **The bars are the sizes and the line is the time.** The units go in the
-// series' names and not on the axis: the axis is shared, and one axis cannot
-// be both megabytes and milliseconds.
+// series' names and not on the axis: a combo never draws the unit, and one
+// axis cannot be both megabytes and seconds.
+//
+// **The line is in seconds.** The service only draws a second axis when the
+// two scales differ by five times or more — in milliseconds the line (a
+// couple of thousand) and the bars (a few hundred megabytes) are too close,
+// and the line's numbers would be read on the bars' scale. In seconds they
+// differ by a hundredfold, the second axis appears, and nothing is
+// abbreviated.
 func limitCharts(limits []report.AxisLimit) []report.Chart {
 	if len(limits) == 0 {
 		return nil
@@ -502,17 +538,16 @@ func limitCharts(limits []report.AxisLimit) []report.Chart {
 		labels = append(labels, limit.Limit)
 		memory = append(memory, megabytes(limit.PeakRSSBytes))
 		spill = append(spill, megabytes(limit.SpillBytes))
-		latency = append(latency, float64(limit.Milliseconds))
+		latency = append(latency, float64(limit.Milliseconds)/1000)
 	}
 	picture, explorer := draw.Combo(
 		"The limit trades memory for time and disk",
-		"",
 		labels,
 		[]draw.Series{
 			{Name: "the peak memory (MB)", Values: memory},
 			{Name: "the spill on disk (MB)", Values: spill},
 		},
-		draw.Series{Name: "the report (ms)", Values: latency},
+		draw.Series{Name: "the report (s)", Values: latency},
 	)
 	return []report.Chart{{
 		Title:    "The limit's trade — the sizes as bars, the time as the line",

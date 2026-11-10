@@ -52,8 +52,28 @@ func URL(chartType string, title string, unit string, labels []string, series []
 // scale (a latency next to a size, a ratio next to a count). When the scales
 // differ enough, the line gets its own axis — otherwise its numbers would be
 // read on the bars' scale, which is a lie.
-func Combo(title string, unit string, labels []string, bars []Series, line Series) (string, string) {
-	return build("combo", title, unit, labels, bars, line.Name, line.Values)
+//
+// **There is no unit here, and that is deliberate.** Two things, both measured
+// and both reported (https://github.com/x-cmd/draw/issues/10):
+//
+//   - the service's `unit` is **one for the whole chart** — and on a combo it
+//     is **never drawn**: the axis shows bare numbers and the unit appears
+//     nowhere on the picture;
+//   - it **is** appended to every series in the tooltip — so a latency line
+//     would offer "78,984 MB", which is wrong, not merely ugly.
+//
+// So **each series carries its own unit in its name** — "the peak memory
+// (MB)", "the report (ms)" — and the reader gets it from the legend.
+//
+// And the unit is **chosen so that no number needs abbreviating**: the service
+// writes a thousand as "1k", and "1k" beside a unit reads like a prefix
+// ("kilo-megabyte") rather than a number. A chart whose values stay under a
+// thousand has no abbreviation at all.
+//
+// An empty line means no line: the chart is then bars only, and it still gets
+// the value labels (a plain `bar` chart does not).
+func Combo(title string, labels []string, bars []Series, line Series) (string, string) {
+	return build("combo", title, "", labels, bars, line.Name, line.Values)
 }
 
 // build: the URL for a chart.

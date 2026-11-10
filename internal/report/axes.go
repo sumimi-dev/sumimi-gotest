@@ -25,7 +25,7 @@ type AxesReport struct {
 	Client machine.Facts `json:"client"`
 	// The machine that was **measured** — the server's own account of itself.
 	Server *machine.Facts `json:"server,omitempty"`
-	// The server's version.
+	// The server's version — **the version the numbers belong to**.
 	ServerVersion string `json:"serverVersion,omitempty"`
 	// The history the axes were measured on.
 	Days int `json:"days"`
@@ -65,6 +65,8 @@ type AxisLimit struct {
 type AxisBackend struct {
 	// The engine: "duckdb" or "sqlite".
 	Backend string `json:"backend"`
+	// The version of the server that was measured.
+	ServerVersion string `json:"serverVersion,omitempty"`
 	// The server's peak resident set, in bytes — the exact high-water mark
 	// on Linux, the server's own account of itself.
 	PeakRSSBytes uint64 `json:"peakRssBytes,omitempty"`
@@ -122,6 +124,10 @@ func (a AxesReport) Markdown() string {
 	out.WriteString(fmt.Sprintf("**The history**: %d days, about %d visitors a day.\n\n",
 		a.Days, a.Visitors))
 	out.WriteString(fmt.Sprintf("**The machine**: %s.\n\n", a.Client.String()))
+	if a.ServerVersion != "" {
+		// **The version the numbers belong to.**
+		out.WriteString(fmt.Sprintf("**The server**: %s.\n\n", a.ServerVersion))
+	}
 
 	if len(a.Backends) == 0 {
 		return out.String()
