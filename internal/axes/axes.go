@@ -112,12 +112,11 @@ func Run(ctx context.Context, options Options) error {
 
 // charts: the same numbers, drawn.
 //
-// **One chart, one question.** The four axes are four comparisons, and they do
-// not share a scale: the memory is hundreds of megabytes, the disk is
-// gigabytes, the latency is tens of seconds. On one axis the small bars
-// vanish — and with them the value labels, because the service labels a layer
-// only if every label fits (https://github.com/x-cmd/draw/issues/10). So each
-// comparison gets its own chart.
+// **The sizes stay together.** The peak memory and the data on disk are both
+// **bytes**, so one axis is honest — and the trade-off between them is the
+// thing to see: DuckDB's memory is the bigger number and its disk the
+// smaller one, SQLite's is the other way round. Split into two charts that
+// trade-off disappears.
 //
 // Three rules, all of them from what the service actually draws:
 //
@@ -126,11 +125,12 @@ func Run(ctx context.Context, options Options) error {
 //     it;
 //   - **the unit is chosen so no number is abbreviated** — the service writes
 //     a thousand as "1k", and beside a byte unit that reads like a prefix
-//     ("kilo-megabyte") rather than a number. So the disk is in **gigabytes**
-//     (3 148 MB would be written "3.1k") and the memory in megabytes;
+//     ("kilo-megabyte") rather than a number. So the sizes are in
+//     **gigabytes** (3 148 MB would be written "3.1k");
 //   - **the two axes differ by at least five times** — that is when the
 //     service draws a second axis at all. Below that, the line's numbers would
-//     be read on the bars' scale, which is a lie.
+//     be read on the bars' scale, which is a lie. Bytes and milliseconds
+//     differ by a thousandfold, so this one is safe.
 func charts(backends []report.AxisBackend) []report.Chart {
 	if len(backends) == 0 {
 		return nil
@@ -141,37 +141,32 @@ func charts(backends []report.AxisBackend) []report.Chart {
 	labels := make([]string, 0, len(backends))
 	memory := make([]float64, 0, len(backends))
 	disk := make([]float64, 0, len(backends))
+	longest := make([]float64, 0, len(backends))
 	for _, backend := range backends {
 		labels = append(labels, backend.Backend)
-		memory = append(memory, megabytes(backend.PeakRSSBytes))
+		memory = append(memory, gigabytes(backend.PeakRSSBytes))
 		disk = append(disk, gigabytes(backend.DataBytes))
+		slowest := int64(0)
+		for _, report := range backend.Reports {
+			if report.Milliseconds > slowest {
+				slowest = report.Milliseconds
+			}
+		}
+		longest = append(longest, float64(slowest))
 	}
 
-	// The peak memory: one scale, one question. Megabytes — the largest is
-	// under a thousand, so nothing is abbreviated.
+	// The four axes: the sizes as bars, the latency as the line.
 	picture, explorer := draw.Combo(
-		"The peak memory",
+		"The four axes",
 		labels,
-		[]draw.Series{{Name: "the peak memory (MB)", Values: memory}},
-		draw.Series{},
+		[]draw.Series{
+			{Name: "the peak memory (GB)", Values: memory},
+			{Name: "the data on disk (GB)", Values: disk},
+		},
+		draw.Series{Name: "the longest report (ms)", Values: longest},
 	)
 	out = append(out, report.Chart{
-		Title:    "The peak memory — the bars are the two engines",
-		Picture:  picture,
-		Explorer: explorer,
-	})
-
-	// The data on disk: the same question, and the disk is ten times bigger,
-	// so it gets its own chart and its own unit — gigabytes, so that "3.1k MB"
-	// is never written.
-	picture, explorer = draw.Combo(
-		"The data on disk",
-		labels,
-		[]draw.Series{{Name: "the data on disk (GB)", Values: disk}},
-		draw.Series{},
-	)
-	out = append(out, report.Chart{
-		Title:    "The data on disk — the bars are the two engines",
+		Title:    "The four axes — the sizes as bars, the latency as the line",
 		Picture:  picture,
 		Explorer: explorer,
 	})
